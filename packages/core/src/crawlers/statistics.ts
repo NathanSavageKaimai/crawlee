@@ -7,6 +7,8 @@ import type { EventManager } from '../events/event_manager';
 import { EventType } from '../events/event_manager';
 import { log as defaultLog } from '../log';
 import { KeyValueStore } from '../storages/key_value_store';
+import { getTelemetry } from '../telemetry';
+import { MetricNames, RequestAttributes } from '../telemetry-constants';
 import { ErrorTracker } from './error_tracker';
 
 /**
@@ -214,6 +216,13 @@ export class Statistics {
         if (!job) job = new Job();
         job.run();
         this.requestsInProgress.set(id, job);
+
+        // Emit telemetry metric for job start
+        const telemetry = getTelemetry();
+        telemetry.recordMetric(MetricNames.REQUESTS_STARTED, 1, {
+            [RequestAttributes.ID]: String(id),
+        });
+        telemetry.recordMetric(MetricNames.REQUESTS_ACTIVE, this.requestsInProgress.size);
     }
 
     /**
@@ -232,6 +241,23 @@ export class Statistics {
         if (jobDurationMillis > this.state.requestMaxDurationMillis)
             this.state.requestMaxDurationMillis = jobDurationMillis;
         this.requestsInProgress.delete(id);
+
+        // Emit telemetry metrics for job completion
+        const telemetry = getTelemetry();
+        telemetry.recordMetric(MetricNames.REQUESTS_FINISHED, 1, {
+            [RequestAttributes.ID]: String(id),
+            [RequestAttributes.RETRY_COUNT]: retryCount,
+        });
+        telemetry.recordMetric(MetricNames.REQUEST_DURATION, jobDurationMillis, {
+            [RequestAttributes.ID]: String(id),
+        });
+        telemetry.recordMetric(MetricNames.REQUESTS_ACTIVE, this.requestsInProgress.size);
+
+        if (retryCount > 0) {
+            telemetry.recordMetric(MetricNames.REQUESTS_RETRIED, retryCount, {
+                [RequestAttributes.ID]: String(id),
+            });
+        }
     }
 
     /**
@@ -241,10 +267,22 @@ export class Statistics {
     failJob(id: number | string, retryCount: number) {
         const job = this.requestsInProgress.get(id);
         if (!job) return;
-        this.state.requestTotalFailedDurationMillis += job.finish();
+        const jobDurationMillis = job.finish();
+        this.state.requestTotalFailedDurationMillis += jobDurationMillis;
         this.state.requestsFailed++;
         this._saveRetryCountForJob(retryCount);
         this.requestsInProgress.delete(id);
+
+        // Emit telemetry metrics for job failure
+        const telemetry = getTelemetry();
+        telemetry.recordMetric(MetricNames.REQUESTS_FAILED, 1, {
+            [RequestAttributes.ID]: String(id),
+            [RequestAttributes.RETRY_COUNT]: retryCount,
+        });
+        telemetry.recordMetric(MetricNames.REQUEST_DURATION, jobDurationMillis, {
+            [RequestAttributes.ID]: String(id),
+        });
+        telemetry.recordMetric(MetricNames.REQUESTS_ACTIVE, this.requestsInProgress.size);
     }
 
     /**

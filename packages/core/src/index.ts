@@ -15,5 +15,21 @@ export * from './storages';
 export * from './validators';
 export * from './cookie_utils';
 export * from './recoverable_state';
+export * from './telemetry';
+export * from './telemetry-constants';
 export { PseudoUrl } from '@apify/pseudo_url';
-export { Dictionary, Awaitable, Constructor, StorageClient, Cookie, QueueOperationInfo } from '@crawlee/types';
+export {
+    Dictionary,
+    Awaitable,
+    Constructor,
+    StorageClient,
+    Cookie,
+    QueueOperationInfo,
+    // Telemetry types
+    Telemetry,
+    TelemetryConfig,
+    TelemetrySpan,
+    SpanAttributes,
+    SpanOptions,
+    SpanStatus,
+} from '@crawlee/types';

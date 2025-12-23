@@ -50,5 +50,8 @@
     },
     "dependencies": {
         "tslib": "^2.4.0"
+    },
+    "peerDependencies": {
+        "@apify/log": "^2.4.0"
     }
 }

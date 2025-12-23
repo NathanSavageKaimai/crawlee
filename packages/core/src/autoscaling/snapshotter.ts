@@ -10,6 +10,8 @@ import { Configuration } from '../configuration';
 import type { EventManager } from '../events/event_manager';
 import { EventType } from '../events/event_manager';
 import { log as defaultLog } from '../log';
+import { getTelemetry } from '../telemetry';
+import { MetricNames, SystemAttributes } from '../telemetry-constants';
 import type { SystemInfo } from './system_status';
 
 const RESERVE_MEMORY_RATIO = 0.5;
@@ -300,14 +302,23 @@ export class Snapshotter {
         const createdAt = systemInfo.createdAt ? new Date(systemInfo.createdAt) : new Date();
         this._pruneSnapshots(this.memorySnapshots, createdAt);
         const { memCurrentBytes } = systemInfo;
+        const memoryRatio = memCurrentBytes! / this.maxMemoryBytes!;
+        const isOverloaded = memoryRatio > this.maxUsedMemoryRatio;
         const snapshot: MemorySnapshot = {
             createdAt,
-            isOverloaded: memCurrentBytes! / this.maxMemoryBytes! > this.maxUsedMemoryRatio,
+            isOverloaded,
             usedBytes: memCurrentBytes,
         };
 
         this.memorySnapshots.push(snapshot);
         this._memoryOverloadWarning(systemInfo);
+
+        // Emit telemetry metrics for memory snapshot
+        const telemetry = getTelemetry();
+        telemetry.recordMetric(MetricNames.MEMORY_USAGE, memCurrentBytes!, {
+            [SystemAttributes.MEMORY_RATIO]: memoryRatio,
+            [SystemAttributes.MEMORY_OVERLOADED]: isOverloaded,
+        });
     }
 
     /**
@@ -374,10 +385,18 @@ export class Snapshotter {
         const createdAt = systemInfo.createdAt ? new Date(systemInfo.createdAt) : new Date();
         this._pruneSnapshots(this.cpuSnapshots, createdAt);
 
+        const cpuRatio = cpuCurrentUsage! / 100;
         this.cpuSnapshots.push({
             createdAt,
             isOverloaded: isCpuOverloaded!,
-            usedRatio: Math.ceil(cpuCurrentUsage! / 100),
+            usedRatio: Math.ceil(cpuRatio),
+        });
+
+        // Emit telemetry metrics for CPU snapshot
+        const telemetry = getTelemetry();
+        telemetry.recordMetric(MetricNames.CPU_USAGE, cpuCurrentUsage!, {
+            [SystemAttributes.CPU_RATIO]: cpuRatio,
+            [SystemAttributes.CPU_OVERLOADED]: isCpuOverloaded!,
         });
     }
 

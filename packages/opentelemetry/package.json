@@ -1,0 +1,78 @@
+{
+    "name": "@crawlee/opentelemetry",
+    "version": "3.15.3",
+    "description": "OpenTelemetry instrumentation for Crawlee - provides distributed tracing and observability",
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "main": "./dist/index.js",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./package.json": "./package.json"
+    },
+    "keywords": [
+        "crawlee",
+        "opentelemetry",
+        "tracing",
+        "observability",
+        "instrumentation",
+        "spans",
+        "metrics"
+    ],
+    "author": {
+        "name": "Apify",
+        "email": "support@apify.com",
+        "url": "https://apify.com"
+    },
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/apify/crawlee"
+    },
+    "bugs": {
+        "url": "https://github.com/apify/crawlee/issues"
+    },
+    "homepage": "https://crawlee.dev",
+    "scripts": {
+        "build": "yarn clean && yarn compile && yarn copy",
+        "clean": "rimraf ./dist",
+        "compile": "tsc -p tsconfig.build.json && gen-esm-wrapper ./dist/index.js ./dist/index.mjs",
+        "copy": "tsx ../../scripts/copy.ts"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "dependencies": {
+        "tslib": "^2.4.0"
+    },
+    "peerDependencies": {
+        "@apify/log": "^2.4.0",
+        "@crawlee/core": "^3.0.0",
+        "@crawlee/types": "3.15.3",
+        "@opentelemetry/api": "^1.9.0",
+        "@opentelemetry/core": "^1.25.0",
+        "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
+        "@opentelemetry/resources": "^1.25.0",
+        "@opentelemetry/sdk-trace-base": "^1.25.0",
+        "@opentelemetry/sdk-trace-node": "^1.25.0",
+        "@opentelemetry/semantic-conventions": "^1.25.0"
+    },
+    "devDependencies": {
+        "@apify/log": "^2.4.0",
+        "@crawlee/core": "^3.0.0",
+        "@crawlee/types": "3.15.3",
+        "@opentelemetry/api": "^1.9.0",
+        "@opentelemetry/core": "^1.25.0",
+        "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
+        "@opentelemetry/resources": "^1.25.0",
+        "@opentelemetry/sdk-trace-base": "^1.25.0",
+        "@opentelemetry/sdk-trace-node": "^1.25.0",
+        "@opentelemetry/semantic-conventions": "^1.25.0"
+    }
+}

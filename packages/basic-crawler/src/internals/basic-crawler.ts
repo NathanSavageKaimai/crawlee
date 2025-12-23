@@ -31,16 +31,21 @@ import type {
 import {
     AutoscaledPool,
     Configuration,
+    CrawlerAttributes,
+    CrawlerSpanNames,
     CriticalError,
     Dataset,
     enqueueLinks,
     EnqueueStrategy,
+    ErrorAttributes,
     EventType,
+    getTelemetry,
     GotScrapingHttpClient,
     KeyValueStore,
     mergeCookies,
     NonRetryableError,
     purgeDefaultStorages,
+    RequestAttributes,
     RequestListAdapter,
     RequestManagerTandem,
     RequestProvider,
@@ -49,9 +54,13 @@ import {
     RequestState,
     RetryRequestError,
     Router,
+    SessionAttributes,
     SessionError,
     SessionPool,
+    SpanStatusCode,
     Statistics,
+    StatisticsAttributes,
+    TelemetryEventNames,
     validators,
 } from '@crawlee/core';
 import type { Awaitable, BatchAddRequestsResult, Dictionary, SetStatusMessageOptions } from '@crawlee/types';
@@ -683,7 +692,7 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         }
 
         this.httpClient = httpClient ?? new GotScrapingHttpClient();
-        this.log = log;
+        // this.log = log;
         this.statusMessageLoggingInterval = statusMessageLoggingInterval;
         this.statusMessageCallback = statusMessageCallback as StatusMessageCallback;
         this.events = config.getEventManager();
@@ -691,6 +700,13 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         this.experiments = experiments;
         this.robotsTxtFileCache = new LruCache({ maxLength: 1000 });
         this.handleSkippedRequest = this.handleSkippedRequest.bind(this);
+
+        const telemetry = getTelemetry();
+        if (telemetry.enabled) {
+            this.log = telemetry.wrapLog(log);
+        } else {
+            this.log = log;
+        }
 
         this._handlePropertyNameChange({
             newName: 'requestHandler',
@@ -1013,8 +1029,39 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
 
         let stats = {} as FinalStatistics;
 
-        try {
+        // Start root telemetry span for the entire crawler run
+        const telemetry = getTelemetry();
+        const rootSpan = telemetry.startSpan(CrawlerSpanNames.CRAWLER_RUN, {
+            attributes: {
+                [CrawlerAttributes.TYPE]: this.constructor.name,
+                [CrawlerAttributes.MAX_REQUESTS_PER_CRAWL]: this.maxRequestsPerCrawl ?? 0,
+            },
+        });
+
+        // Helper to run the autoscaled pool within the root span's context
+        // This ensures all child spans (request handling, etc.) are linked to this root span
+        // eslint-disable-next-line consistent-return
+        const runAutoscaledPool = async (): Promise<void> => {
+            if (rootSpan) {
+                return telemetry.runInSpanContext(rootSpan, async () => {
+                    await this.autoscaledPool!.run();
+                });
+            }
             await this.autoscaledPool!.run();
+        };
+
+        try {
+            await runAutoscaledPool();
+            rootSpan?.setStatus({ code: SpanStatusCode.OK });
+        } catch (error) {
+            rootSpan?.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : String(error),
+            });
+            if (error instanceof Error) {
+                rootSpan?.recordException(error);
+            }
+            throw error;
         } finally {
             await this.teardown();
             await this.stats.stopCapturing();
@@ -1030,6 +1077,16 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
                 retryHistogram: this.stats.requestRetryHistogram,
                 ...finalStats,
             };
+
+            // Add final statistics to the root span
+            rootSpan?.setAttributes({
+                [StatisticsAttributes.REQUESTS_FINISHED]: stats.requestsFinished,
+                [StatisticsAttributes.REQUESTS_FAILED]: stats.requestsFailed,
+                [StatisticsAttributes.RUNTIME_MS]: stats.crawlerRuntimeMillis,
+                [StatisticsAttributes.REQUESTS_PER_MINUTE]: stats.requestsFinishedPerMinute,
+            });
+            rootSpan?.end();
+
             this.log.info('Final request statistics:', stats);
 
             if (this.stats.errorTracker.total !== 0) {
@@ -1597,13 +1654,47 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         this.crawlingContexts.set(crawlingContext.id, crawlingContext);
         let isRequestLocked = true;
 
+        // Start telemetry span for this request
+        const telemetry = getTelemetry();
+        const requestSpan = telemetry.startSpan(CrawlerSpanNames.REQUEST_HANDLE, {
+            attributes: {
+                [RequestAttributes.ID]: request.id || '',
+                [RequestAttributes.URL]: request.url,
+                [RequestAttributes.METHOD]: request.method || 'GET',
+                [RequestAttributes.UNIQUE_KEY]: request.uniqueKey,
+                [RequestAttributes.RETRY_COUNT]: request.retryCount,
+                [RequestAttributes.DEPTH]: request.crawlDepth ?? 0,
+                [SessionAttributes.ID]: session?.id || '',
+            },
+        });
+
+        const requestStartTime = Date.now();
+
+        // Helper to run code within the request span's context
+        // This ensures child spans created by user code are linked to the request span
+        const runInRequestContext = async <T>(fn: () => Promise<T>): Promise<T> => {
+            if (requestSpan) {
+                return telemetry.runInSpanContext(requestSpan, fn);
+            }
+            return fn();
+        };
+
         try {
             request.state = RequestState.REQUEST_HANDLER;
-            await addTimeoutToPromise(
-                async () => this._runRequestHandler(crawlingContext),
-                this.requestHandlerTimeoutMillis,
-                `requestHandler timed out after ${this.requestHandlerTimeoutMillis / 1000} seconds (${request.id}).`,
-            );
+
+            // Add event for request start
+            telemetry.addEvent(TelemetryEventNames.REQUEST_START, {
+                [RequestAttributes.URL]: request.url,
+            });
+
+            // Run the request handler within the span context
+            await runInRequestContext(async () => {
+                await addTimeoutToPromise(
+                    async () => this._runRequestHandler(crawlingContext),
+                    this.requestHandlerTimeoutMillis,
+                    `requestHandler timed out after ${this.requestHandlerTimeoutMillis / 1000} seconds (${request.id}).`,
+                );
+            });
 
             await this._timeoutAndRetry(
                 async () => source.markRequestHandled(request!),
@@ -1620,9 +1711,40 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
             // reclaim session if request finishes successfully
             request.state = RequestState.DONE;
             crawlingContext.session?.markGood();
+
+            // Mark request span as successful
+            requestSpan?.setAttributes({
+                [RequestAttributes.STATE]: 'DONE',
+                [RequestAttributes.DURATION_MS]: Date.now() - requestStartTime,
+                [RequestAttributes.LOADED_URL]: request.loadedUrl || request.url,
+            });
+            requestSpan?.setStatus({ code: SpanStatusCode.OK });
+            telemetry.addEvent(TelemetryEventNames.REQUEST_COMPLETE, {
+                [RequestAttributes.URL]: request.url,
+                [RequestAttributes.DURATION_MS]: Date.now() - requestStartTime,
+            });
         } catch (err) {
             try {
                 request.state = RequestState.ERROR_HANDLER;
+
+                // Record error on span
+                requestSpan?.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message: err instanceof Error ? err.message : String(err),
+                });
+                if (err instanceof Error) {
+                    requestSpan?.recordException(err);
+                }
+                requestSpan?.setAttributes({
+                    [ErrorAttributes.TYPE]: err instanceof Error ? err.constructor.name : 'Error',
+                    [ErrorAttributes.MESSAGE]: err instanceof Error ? err.message : String(err),
+                    [ErrorAttributes.RETRYABLE]: this._canRequestBeRetried(request, err as Error),
+                });
+                telemetry.addEvent(TelemetryEventNames.REQUEST_FAIL, {
+                    [RequestAttributes.URL]: request.url,
+                    [ErrorAttributes.TYPE]: err instanceof Error ? err.constructor.name : 'Error',
+                });
+
                 await addTimeoutToPromise(
                     async () => this._requestFunctionErrorHandler(err as Error, crawlingContext, source),
                     this.internalTimeoutMillis,
@@ -1655,6 +1777,13 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
             // decrease the session score if the request fails (but the error handler did not throw)
             crawlingContext.session?.markBad();
         } finally {
+            // Always end the request span
+            requestSpan?.setAttributes({
+                [RequestAttributes.STATE]: request.state,
+                [RequestAttributes.DURATION_MS]: Date.now() - requestStartTime,
+            });
+            requestSpan?.end();
+
             await this._cleanupContext(crawlingContext);
 
             this.crawlingContexts.delete(crawlingContext.id);
