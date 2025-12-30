@@ -28,6 +28,10 @@ import log from '@apify/log';
  * All methods are no-ops that return immediately.
  */
 class NoOpSpan implements TelemetrySpan {
+    addEvent(_name: string, _attributes?: SpanAttributes): void {
+        // No-op
+    }
+
     setAttribute(_key: string, _value: string | number | boolean): this {
         return this;
     }
@@ -75,15 +79,11 @@ class NoOpTelemetry implements Telemetry {
         this.config = { ...config, enabled: false };
     }
 
-    startSpan(_name: string, _options?: SpanOptions): TelemetrySpan | undefined {
-        return undefined;
+    startSpan(_name: string, _options?: SpanOptions): TelemetrySpan {
+        return undefined as unknown as TelemetrySpan;
     }
 
-    async withSpan<T>(
-        _name: string,
-        fn: (span: TelemetrySpan) => Promise<T>,
-        _options?: SpanOptions,
-    ): Promise<T> {
+    async withSpan<T>(_name: string, fn: (span: TelemetrySpan) => Promise<T>, _options?: SpanOptions): Promise<T> {
         // Execute function without span context
         return fn(this.noOpSpan);
     }
@@ -102,10 +102,6 @@ class NoOpTelemetry implements Telemetry {
     }
 
     recordMetric(_name: string, _value: number, _attributes?: SpanAttributes): void {
-        // No-op
-    }
-
-    async shutdown(): Promise<void> {
         // No-op
     }
 
@@ -170,7 +166,6 @@ export function getTelemetry(): Telemetry {
  *     enabled: true,
  *     serviceName: 'my-crawler',
  *     serviceVersion: '1.0.0',
- *     otlpEndpoint: 'http://localhost:4318',
  * });
  * ```
  */
@@ -234,12 +229,10 @@ export async function startTelemetry(config: TelemetryConfig = {}): Promise<Tele
  */
 export async function stopTelemetry(): Promise<void> {
     if (telemetryStarted && telemetryInstance.enabled) {
-        await telemetryInstance.shutdown();
+        telemetryInstance = new NoOpTelemetry();
+        telemetryStarted = false;
         log.debug('Telemetry shut down successfully');
     }
-
-    telemetryInstance = new NoOpTelemetry();
-    telemetryStarted = false;
 }
 
 /**
@@ -254,4 +247,3 @@ export function resetTelemetry(): void {
 
 // Re-export the SpanStatusCode for convenience
 export { SpanStatusCode };
-

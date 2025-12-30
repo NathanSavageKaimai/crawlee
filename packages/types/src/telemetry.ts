@@ -35,6 +35,10 @@ export type SpanAttributes = Dictionary<string | number | boolean | undefined>;
  * This is a simplified interface that matches OpenTelemetry's Span API.
  */
 export interface TelemetrySpan {
+
+    /** Adds an event to the span */
+    addEvent(name: string, attributes?: SpanAttributes): void;
+
     /** Sets an attribute on the span */
     setAttribute(key: string, value: string | number | boolean): this;
 
@@ -83,36 +87,28 @@ export interface TelemetryConfig {
 
     /**
      * Service name for telemetry reporting.
+     * Ignored if tracer is provided.
      * @default 'crawlee'
      */
     serviceName?: string;
 
     /**
      * Service version for telemetry reporting.
+     * Ignored if tracer is provided.
      */
     serviceVersion?: string;
 
     /**
-     * Additional resource attributes.
+     * Tracer instance.
+     * This replaces the default tracer.
      */
-    resourceAttributes?: Dictionary<string>;
+    tracer?: any; // Cannot properly type without OTEL type leakage
 
     /**
-     * Whether to export to console (useful for debugging).
-     * @default false
+     * Wether to collect logs for telemetry.
+     * @default true
      */
-    consoleExporter?: boolean;
-
-    /**
-     * OTLP exporter endpoint URL.
-     * If provided, traces will be exported to this endpoint.
-     */
-    otlpEndpoint?: string;
-
-    /**
-     * OTLP exporter headers (e.g., for authentication).
-     */
-    otlpHeaders?: Dictionary<string>;
+    collectLogs?: boolean;
 }
 
 /**
@@ -130,7 +126,7 @@ export interface Telemetry {
      * Creates and starts a new span.
      * Returns undefined if telemetry is disabled.
      */
-    startSpan(name: string, options?: SpanOptions): TelemetrySpan | undefined;
+    startSpan(name: string, options?: SpanOptions): TelemetrySpan;
 
     /**
      * Executes a function within a span context.
@@ -161,11 +157,6 @@ export interface Telemetry {
     recordMetric(name: string, value: number, attributes?: SpanAttributes): void;
 
     /**
-     * Shuts down the telemetry system and flushes any pending data.
-     */
-    shutdown(): Promise<void>;
-
-    /**
      * Wraps the log instance to collect logs for telemetry.
      */
     wrapLog(log: Log): Log;
@@ -176,4 +167,3 @@ export interface Telemetry {
  * This is what @crawlee/opentelemetry exports as its main entry point.
  */
 export type TelemetryFactory = (config: TelemetryConfig) => Telemetry;
-

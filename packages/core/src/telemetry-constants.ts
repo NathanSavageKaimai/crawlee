@@ -33,6 +33,15 @@ export const CrawlerSpanNames = {
 
     /** Span for session rotation */
     SESSION_ROTATE: 'crawlee.session.rotate',
+
+    /** Span for crawlee hooks */
+    HOOKS: 'crawlee.hooks',
+
+    /** Span for pre navigation hooks */
+    PRE_NAVIGATION_HOOKS: 'crawlee.pre_navigation_hooks',
+
+    /** Span for post navigation hooks */
+    POST_NAVIGATION_HOOKS: 'crawlee.post_navigation_hooks',
 } as const;
 
 /**
@@ -424,4 +433,3 @@ export type AttributeName =
     | (typeof ErrorAttributes)[keyof typeof ErrorAttributes]
     | (typeof StatisticsAttributes)[keyof typeof StatisticsAttributes]
     | (typeof SystemAttributes)[keyof typeof SystemAttributes];
-

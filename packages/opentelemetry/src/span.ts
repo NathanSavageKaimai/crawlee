@@ -13,6 +13,10 @@ import { SpanStatusCode as OTelSpanStatusCode } from '@opentelemetry/api';
 export class OpenTelemetrySpan implements TelemetrySpan {
     constructor(private readonly span: OTelSpan) {}
 
+    addEvent(name: string, attributes?: SpanAttributes): void {
+        this.span.addEvent(name, attributes as Record<string, string | number | boolean>);
+    }
+
     setAttribute(key: string, value: string | number | boolean): this {
         this.span.setAttribute(key, value);
         return this;
@@ -77,4 +81,3 @@ export class OpenTelemetrySpan implements TelemetrySpan {
         return this.span;
     }
 }
-

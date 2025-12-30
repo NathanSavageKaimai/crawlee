@@ -6,11 +6,6 @@ import type { SpanAttributes, SpanOptions, Telemetry, TelemetryConfig, Telemetry
 import { SpanStatusCode } from '@crawlee/types';
 import type { Context, Tracer } from '@opentelemetry/api';
 import { context, SpanKind, trace } from '@opentelemetry/api';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { Resource } from '@opentelemetry/resources';
-import { BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
 import type { Log } from '@apify/log';
 
@@ -27,52 +22,25 @@ export class OpenTelemetryInstrumentation implements Telemetry {
     readonly enabled: boolean;
     readonly config: TelemetryConfig;
 
-    private readonly provider: NodeTracerProvider;
     private readonly tracer: Tracer;
+    private readonly collectLogs: boolean;
 
     constructor(config: TelemetryConfig) {
         this.config = config;
         this.enabled = config.enabled ?? true;
+        this.collectLogs = config.collectLogs ?? true;
 
-        // Create resource with service information
-        const resource = new Resource({
-            [ATTR_SERVICE_NAME]: config.serviceName || 'crawlee',
-            [ATTR_SERVICE_VERSION]: config.serviceVersion || 'unknown',
-            ...config.resourceAttributes,
-        });
-
-        // Create the tracer provider
-        this.provider = new NodeTracerProvider({ resource });
-
-        // Add exporters based on configuration
-        if (config.consoleExporter) {
-            this.provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
-        }
-
-        if (config.otlpEndpoint) {
-            const otlpExporter = new OTLPTraceExporter({
-                url: config.otlpEndpoint,
-                headers: config.otlpHeaders,
-            });
-            this.provider.addSpanProcessor(new BatchSpanProcessor(otlpExporter));
-        }
-
-        // If no exporters configured, add console exporter for debugging
-        if (!config.consoleExporter && !config.otlpEndpoint) {
-            // Default: no exporters, spans are still created but not exported
-            // Users must configure an exporter to actually see the traces
-        }
-
-        // Register the provider
-        this.provider.register();
-
-        // Get the tracer
-        this.tracer = trace.getTracer(config.serviceName || 'crawlee', config.serviceVersion);
+        this.tracer =
+            config.tracer ??
+            trace.getTracer(
+                config.serviceName || 'crawlee',
+                config.serviceVersion,
+            );
     }
 
-    startSpan(name: string, options?: SpanOptions): TelemetrySpan | undefined {
+    startSpan(name: string, options?: SpanOptions): TelemetrySpan {
         if (!this.enabled) {
-            return undefined;
+            return undefined as unknown as TelemetrySpan;
         }
 
         let parentContext: Context = context.active();
@@ -173,24 +141,12 @@ export class OpenTelemetryInstrumentation implements Telemetry {
         // Future versions could add OpenTelemetry Metrics API support
     }
 
-    async shutdown(): Promise<void> {
-        await this.provider.shutdown();
-    }
-
     /**
      * Returns the underlying OpenTelemetry tracer.
      * Useful for advanced use cases requiring direct OTel API access.
      */
     getTracer(): Tracer {
         return this.tracer;
-    }
-
-    /**
-     * Returns the underlying OpenTelemetry provider.
-     * Useful for advanced use cases requiring direct OTel API access.
-     */
-    getProvider(): NodeTracerProvider {
-        return this.provider;
     }
 
     private createNoOpSpan(): TelemetrySpan {
@@ -203,10 +159,14 @@ export class OpenTelemetryInstrumentation implements Telemetry {
             getTraceId: () => '',
             getSpanId: () => '',
             isRecording: () => false,
+            addEvent: () => {},
         };
     }
 
     wrapLog(log: Log): Log {
+        if (!this.collectLogs) {
+            return log;
+        }
         return new OpenTelemetryLogger(log, this);
     }
 }
@@ -226,11 +186,9 @@ export class OpenTelemetryInstrumentation implements Telemetry {
  *     enabled: true,
  *     serviceName: 'my-crawler',
  *     serviceVersion: '1.0.0',
- *     otlpEndpoint: 'http://localhost:4318/v1/traces',
  * });
  * ```
  */
 export function createTelemetry(config: TelemetryConfig): Telemetry {
     return new OpenTelemetryInstrumentation(config);
 }
-

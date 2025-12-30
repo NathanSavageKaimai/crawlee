@@ -63,7 +63,12 @@ import {
     TelemetryEventNames,
     validators,
 } from '@crawlee/core';
-import type { Awaitable, BatchAddRequestsResult, Dictionary, SetStatusMessageOptions } from '@crawlee/types';
+import type {
+    Awaitable,
+    BatchAddRequestsResult,
+    Dictionary,
+    SetStatusMessageOptions,
+} from '@crawlee/types';
 import { getObjectType, isAsyncIterable, isIterable, RobotsTxtFile, ROTATE_PROXY_ERRORS } from '@crawlee/utils';
 import { stringify } from 'csv-stringify/sync';
 import { ensureDir, writeFile, writeJSON } from 'fs-extra';
@@ -1031,6 +1036,8 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
 
         // Start root telemetry span for the entire crawler run
         const telemetry = getTelemetry();
+        // Store the root span so child spans can reference it as parent
+        // This is necessary because the autoscaled pool breaks async context propagation
         const rootSpan = telemetry.startSpan(CrawlerSpanNames.CRAWLER_RUN, {
             attributes: {
                 [CrawlerAttributes.TYPE]: this.constructor.name,
@@ -1038,20 +1045,10 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
             },
         });
 
-        // Helper to run the autoscaled pool within the root span's context
-        // This ensures all child spans (request handling, etc.) are linked to this root span
-        // eslint-disable-next-line consistent-return
-        const runAutoscaledPool = async (): Promise<void> => {
-            if (rootSpan) {
-                return telemetry.runInSpanContext(rootSpan, async () => {
-                    await this.autoscaledPool!.run();
-                });
-            }
-            await this.autoscaledPool!.run();
-        };
-
         try {
-            await runAutoscaledPool();
+            await telemetry.runInSpanContext(rootSpan, async () => {
+                await this.autoscaledPool!.run();
+            });
             rootSpan?.setStatus({ code: SpanStatusCode.OK });
         } catch (error) {
             rootSpan?.setStatus({
@@ -1655,6 +1652,8 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         let isRequestLocked = true;
 
         // Start telemetry span for this request
+        // Pass the root span as parent to ensure proper trace hierarchy
+        // This is necessary because autoscaled pool breaks async context propagation
         const telemetry = getTelemetry();
         const requestSpan = telemetry.startSpan(CrawlerSpanNames.REQUEST_HANDLE, {
             attributes: {
@@ -1670,30 +1669,23 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
 
         const requestStartTime = Date.now();
 
-        // Helper to run code within the request span's context
-        // This ensures child spans created by user code are linked to the request span
-        const runInRequestContext = async <T>(fn: () => Promise<T>): Promise<T> => {
-            if (requestSpan) {
-                return telemetry.runInSpanContext(requestSpan, fn);
-            }
-            return fn();
-        };
-
         try {
             request.state = RequestState.REQUEST_HANDLER;
 
-            // Add event for request start
-            telemetry.addEvent(TelemetryEventNames.REQUEST_START, {
-                [RequestAttributes.URL]: request.url,
-            });
-
             // Run the request handler within the span context
-            await runInRequestContext(async () => {
+            await telemetry.runInSpanContext(requestSpan, async () => {
+                // Add event for request start
+                telemetry.addEvent(TelemetryEventNames.REQUEST_START, {
+                    [RequestAttributes.URL]: request.url,
+                });
                 await addTimeoutToPromise(
                     async () => this._runRequestHandler(crawlingContext),
                     this.requestHandlerTimeoutMillis,
                     `requestHandler timed out after ${this.requestHandlerTimeoutMillis / 1000} seconds (${request.id}).`,
                 );
+                requestSpan?.addEvent(TelemetryEventNames.REQUEST_COMPLETE, {
+                    [RequestAttributes.URL]: request.url,
+                });
             });
 
             await this._timeoutAndRetry(
@@ -1719,10 +1711,6 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
                 [RequestAttributes.LOADED_URL]: request.loadedUrl || request.url,
             });
             requestSpan?.setStatus({ code: SpanStatusCode.OK });
-            telemetry.addEvent(TelemetryEventNames.REQUEST_COMPLETE, {
-                [RequestAttributes.URL]: request.url,
-                [RequestAttributes.DURATION_MS]: Date.now() - requestStartTime,
-            });
         } catch (err) {
             try {
                 request.state = RequestState.ERROR_HANDLER;
@@ -2062,8 +2050,15 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         ...args: Parameters<HookLike>
     ) {
         if (Array.isArray(hooks) && hooks.length) {
-            for (const hook of hooks) {
-                await hook(...args);
+            const telemetry = getTelemetry();
+            for (let i = 0; i < hooks.length; i++) {
+                await telemetry.withSpan(CrawlerSpanNames.HOOKS, async (_span) => {
+                    await hooks[i](...args);
+                }, {
+                    attributes: {
+                        'hook.index': i + 1,
+                    },
+                });
             }
         }
     }

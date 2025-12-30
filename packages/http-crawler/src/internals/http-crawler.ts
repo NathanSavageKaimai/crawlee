@@ -22,11 +22,16 @@ import {
     BLOCKED_STATUS_CODES,
     Configuration,
     CrawlerExtension,
+    CrawlerSpanNames,
+    getTelemetry,
+    HttpSpanNames,
     mergeCookies,
     processHttpRequestOptions,
+    RequestAttributes,
     RequestState,
     Router,
     SessionError,
+    SpanStatusCode,
     validators,
 } from '@crawlee/basic';
 import type { HttpResponse, StreamingHttpResponse } from '@crawlee/core';
@@ -513,7 +518,31 @@ export class HttpCrawler<
         }
 
         if (!request.skipNavigation) {
-            await this._handleNavigation(crawlingContext);
+            const telemetry = getTelemetry();
+            const navigationSpan = telemetry.startSpan(HttpSpanNames.NAVIGATION, {
+                attributes: {
+                    [RequestAttributes.URL]: request.url,
+                    [RequestAttributes.METHOD]: request.method || 'GET',
+                },
+            });
+
+            try {
+                await telemetry.runInSpanContext(navigationSpan, async () => {
+                    await this._handleNavigation(crawlingContext);
+                });
+                navigationSpan?.setStatus({ code: SpanStatusCode.OK });
+            } catch (e) {
+                navigationSpan?.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message: e instanceof Error ? e.message : String(e),
+                });
+                if (e instanceof Error) {
+                    navigationSpan?.recordException(e);
+                }
+                throw e;
+            } finally {
+                navigationSpan?.end();
+            }
             tryCancel();
 
             const parsed = await this._parseResponse(request, crawlingContext.response!, crawlingContext);
@@ -580,16 +609,37 @@ export class HttpCrawler<
         }
 
         request.state = RequestState.REQUEST_HANDLER;
+
+        const telemetry = getTelemetry();
+        const handlerSpan = telemetry.startSpan(CrawlerSpanNames.REQUEST_HANDLER_USER, {
+            attributes: {
+                [RequestAttributes.URL]: request.url,
+                [RequestAttributes.METHOD]: request.method || 'GET',
+            },
+        });
+
         try {
-            await addTimeoutToPromise(
+            await telemetry.runInSpanContext(handlerSpan, async () => {
+                await addTimeoutToPromise(
                 async () => Promise.resolve(this.requestHandler(crawlingContext as LoadedContext<Context>)),
-                this.userRequestHandlerTimeoutMillis,
-                `requestHandler timed out after ${this.userRequestHandlerTimeoutMillis / 1000} seconds.`,
-            );
+                    this.userRequestHandlerTimeoutMillis,
+                    `requestHandler timed out after ${this.userRequestHandlerTimeoutMillis / 1000} seconds.`,
+                );
+            });
             request.state = RequestState.DONE;
+            handlerSpan?.setStatus({ code: SpanStatusCode.OK });
         } catch (e: any) {
             request.state = RequestState.ERROR;
+            handlerSpan?.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: e instanceof Error ? e.message : String(e),
+            });
+            if (e instanceof Error) {
+                handlerSpan?.recordException(e);
+            }
             throw e;
+        } finally {
+            handlerSpan?.end();
         }
     }
 
@@ -622,11 +672,16 @@ export class HttpCrawler<
         const gotOptions = {} as OptionsInit;
         const { request, session } = crawlingContext;
         const preNavigationHooksCookies = this._getCookieHeaderFromRequest(request);
+        const telemetry = getTelemetry();
 
         request.state = RequestState.BEFORE_NAV;
         // Execute pre navigation hooks before applying session pool cookies,
         // as they may also set cookies in the session
-        await this._executeHooks(this.preNavigationHooks, crawlingContext, gotOptions);
+        if (this.preNavigationHooks) {
+            await telemetry.withSpan(CrawlerSpanNames.PRE_NAVIGATION_HOOKS, async (_span) => {
+                await this._executeHooks(this.preNavigationHooks, crawlingContext, gotOptions);
+            });
+        }
         tryCancel();
 
         const postNavigationHooksCookies = this._getCookieHeaderFromRequest(request);
@@ -643,7 +698,11 @@ export class HttpCrawler<
         tryCancel();
 
         request.state = RequestState.AFTER_NAV;
-        await this._executeHooks(this.postNavigationHooks, crawlingContext, gotOptions);
+        if (this.postNavigationHooks) {
+        await telemetry.withSpan(CrawlerSpanNames.POST_NAVIGATION_HOOKS, async (_span) => {
+                await this._executeHooks(this.postNavigationHooks, crawlingContext, gotOptions);
+            });
+        }
         tryCancel();
     }
 
