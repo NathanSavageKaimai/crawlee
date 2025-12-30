@@ -63,12 +63,7 @@ import {
     TelemetryEventNames,
     validators,
 } from '@crawlee/core';
-import type {
-    Awaitable,
-    BatchAddRequestsResult,
-    Dictionary,
-    SetStatusMessageOptions,
-} from '@crawlee/types';
+import type { Awaitable, BatchAddRequestsResult, Dictionary, SetStatusMessageOptions } from '@crawlee/types';
 import { getObjectType, isAsyncIterable, isIterable, RobotsTxtFile, ROTATE_PROXY_ERRORS } from '@crawlee/utils';
 import { stringify } from 'csv-stringify/sync';
 import { ensureDir, writeFile, writeJSON } from 'fs-extra';
@@ -2052,13 +2047,17 @@ export class BasicCrawler<Context extends CrawlingContext = BasicCrawlingContext
         if (Array.isArray(hooks) && hooks.length) {
             const telemetry = getTelemetry();
             for (let i = 0; i < hooks.length; i++) {
-                await telemetry.withSpan(CrawlerSpanNames.HOOKS, async (_span) => {
-                    await hooks[i](...args);
-                }, {
-                    attributes: {
-                        'hook.index': i + 1,
+                await telemetry.withSpan(
+                    CrawlerSpanNames.HOOKS,
+                    async (_span) => {
+                        await hooks[i](...args);
                     },
-                });
+                    {
+                        attributes: {
+                            'hook.index': i + 1,
+                        },
+                    },
+                );
             }
         }
     }

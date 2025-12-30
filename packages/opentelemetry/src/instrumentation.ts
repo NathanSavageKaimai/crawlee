@@ -30,12 +30,7 @@ export class OpenTelemetryInstrumentation implements Telemetry {
         this.enabled = config.enabled ?? true;
         this.collectLogs = config.collectLogs ?? true;
 
-        this.tracer =
-            config.tracer ??
-            trace.getTracer(
-                config.serviceName || 'crawlee',
-                config.serviceVersion,
-            );
+        this.tracer = config.tracer ?? trace.getTracer(config.serviceName || 'crawlee', config.serviceVersion);
     }
 
     startSpan(name: string, options?: SpanOptions): TelemetrySpan {

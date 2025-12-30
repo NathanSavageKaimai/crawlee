@@ -35,7 +35,6 @@ export type SpanAttributes = Dictionary<string | number | boolean | undefined>;
  * This is a simplified interface that matches OpenTelemetry's Span API.
  */
 export interface TelemetrySpan {
-
     /** Adds an event to the span */
     addEvent(name: string, attributes?: SpanAttributes): void;
 

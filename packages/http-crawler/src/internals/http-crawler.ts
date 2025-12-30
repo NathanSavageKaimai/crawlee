@@ -621,7 +621,7 @@ export class HttpCrawler<
         try {
             await telemetry.runInSpanContext(handlerSpan, async () => {
                 await addTimeoutToPromise(
-                async () => Promise.resolve(this.requestHandler(crawlingContext as LoadedContext<Context>)),
+                    async () => Promise.resolve(this.requestHandler(crawlingContext as LoadedContext<Context>)),
                     this.userRequestHandlerTimeoutMillis,
                     `requestHandler timed out after ${this.userRequestHandlerTimeoutMillis / 1000} seconds.`,
                 );
@@ -699,7 +699,7 @@ export class HttpCrawler<
 
         request.state = RequestState.AFTER_NAV;
         if (this.postNavigationHooks) {
-        await telemetry.withSpan(CrawlerSpanNames.POST_NAVIGATION_HOOKS, async (_span) => {
+            await telemetry.withSpan(CrawlerSpanNames.POST_NAVIGATION_HOOKS, async (_span) => {
                 await this._executeHooks(this.postNavigationHooks, crawlingContext, gotOptions);
             });
         }
